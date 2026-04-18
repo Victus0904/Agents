@@ -1,0 +1,4 @@
+unstructured
+unstructured-inference
+unstructured-pytesseract
+pydantic
