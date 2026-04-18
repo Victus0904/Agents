@@ -1,5 +1,7 @@
 chromadb
 google-genai
+pdf2image
+pi-heif
 pydantic
 unstructured
 unstructured-inference

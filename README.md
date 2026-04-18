@@ -37,6 +37,11 @@ Official references used for this implementation:
 pip install -r requirements.txt
 ```
 
+For `unstructured` PDF parsing, install the required system dependencies as well.
+The upstream Unstructured installation guidance calls out `poppler-utils` and
+`tesseract-ocr` for PDFs and images, plus `libmagic-dev` for file-type
+detection. Docker setup below includes those packages.
+
 Set environment variables, for example with `.env.example` as a template:
 
 ```bash
@@ -52,6 +57,9 @@ $env:GEMINI_API_KEY="..."
 $env:CHROMA_PATH="chroma_db"
 $env:CHROMA_COLLECTION="document_chunks"
 ```
+
+If you use a `.env` file for Docker or local tooling, copy `.env.example` and
+replace the placeholder API key value with your real key.
 
 ## Ingest a PDF
 
@@ -69,6 +77,55 @@ This will:
 - store vectors and metadata in persistent local ChromaDB storage
 
 Chroma data is stored by default in `./chroma_db`.
+
+## Docker Deployment
+
+Build the image:
+
+```bash
+docker build -t multimodal-rag .
+```
+
+Create a `.env` file from `.env.example`, then run ingestion with the current
+project directory mounted into the container:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -e CHROMA_PATH=/app/chroma_db \
+  -v "$(pwd)/chroma_db:/app/chroma_db" \
+  -v "$(pwd):/app/data" \
+  -w /app/data \
+  multimodal-rag ingest --pdf Optical_Music_Recognition_State_of_the_Art_and_Maj.pdf --write-debug-json
+```
+
+Ask a question against the persisted Chroma data:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -e CHROMA_PATH=/app/chroma_db \
+  -v "$(pwd)/chroma_db:/app/chroma_db" \
+  -v "$(pwd):/app/data" \
+  -w /app/data \
+  multimodal-rag ask --question "What is this paper about?" --top-k 5
+```
+
+If you prefer Docker Compose:
+
+```bash
+docker compose run --rm multimodal-rag ingest --pdf Optical_Music_Recognition_State_of_the_Art_and_Maj.pdf --write-debug-json
+docker compose run --rm multimodal-rag ask --question "What is this paper about?" --top-k 5
+```
+
+Notes:
+
+- The image installs `poppler-utils`, `tesseract-ocr`, and `libmagic-dev`.
+- `./chroma_db` is mounted for persistent vector storage.
+- The project directory is mounted at `/app/data`, so PDFs, extracted assets,
+  and `processed_metadata.json` stay on the host filesystem.
+- `CHROMA_PATH` is redirected to `/app/chroma_db` inside the container so the
+  database lives on the dedicated volume mount.
 
 ## Ask questions
 

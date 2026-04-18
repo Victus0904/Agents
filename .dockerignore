@@ -1,0 +1,15 @@
+.git
+.gitignore
+.idea
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+chroma_db/
+extracted_assets/
+processed_metadata.json

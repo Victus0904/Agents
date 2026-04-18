@@ -1,0 +1,14 @@
+services:
+  multimodal-rag:
+    build:
+      context: .
+    image: multimodal-rag:latest
+    env_file:
+      - .env
+    environment:
+      CHROMA_PATH: /app/chroma_db
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./:/app/data
+    working_dir: /app/data
+    entrypoint: ["python", "/app/multimodal_rag.py"]
