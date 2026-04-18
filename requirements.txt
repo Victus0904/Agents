@@ -1,4 +1,6 @@
+chromadb
+google-genai
+pydantic
 unstructured
 unstructured-inference
 unstructured-pytesseract
-pydantic

@@ -1,4 +1,6 @@
 ### IntelliJ IDEA ###
+.idea/
+*.iml
 out/
 !**/src/main/**/out/
 !**/src/test/**/out/
@@ -35,6 +37,9 @@ __pycache__/
 *.pyo
 *.pyd
 .python-version
+.env
+.env.*
+!.env.example
 .venv/
 venv/
 env/
@@ -45,3 +50,4 @@ env/
 ### Generated document parsing outputs ###
 extracted_assets/
 processed_metadata.json
+chroma_db/
