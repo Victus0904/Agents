@@ -6,6 +6,8 @@ import argparse
 import json
 import mimetypes
 import os
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,8 @@ class Settings:
     generation_model: str = "gemini-2.5-flash"
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
+    embedding_batch_size: int = 50
+    api_retry_attempts: int = 5
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -50,6 +54,8 @@ class Settings:
             generation_model=os.getenv("GEMINI_GENERATION_MODEL", "gemini-2.5-flash"),
             embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"),
             embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "768")),
+            embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "50")),
+            api_retry_attempts=int(os.getenv("API_RETRY_ATTEMPTS", "5")),
         )
 
 
@@ -69,8 +75,49 @@ class GeminiClient:
             raise ValueError(f"Cannot process empty content for {context}.")
         return cleaned
 
+    @staticmethod
+    def _retry_delay_seconds(exc: Exception) -> float | None:
+        message = str(exc)
+        retry_in_match = re.search(r"retry in ([0-9]+(?:\.[0-9]+)?)s", message, re.IGNORECASE)
+        if retry_in_match:
+            return float(retry_in_match.group(1))
+
+        retry_delay_match = re.search(r"'retryDelay': '([0-9]+)s'", message)
+        if retry_delay_match:
+            return float(retry_delay_match.group(1))
+
+        return None
+
+    def _run_with_retry(self, operation: str, func: Any) -> Any:
+        last_error: Exception | None = None
+        for attempt in range(1, self.settings.api_retry_attempts + 1):
+            try:
+                return func()
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                message = str(exc)
+                if "RESOURCE_EXHAUSTED" not in message and "quota" not in message.lower():
+                    raise
+
+                if attempt >= self.settings.api_retry_attempts:
+                    break
+
+                delay = self._retry_delay_seconds(exc) or min(60.0, float(attempt * 10))
+                print(
+                    f"{operation} hit Gemini quota limits. "
+                    f"Retrying in {delay:.1f}s (attempt {attempt}/{self.settings.api_retry_attempts})."
+                )
+                time.sleep(delay)
+
+        raise RuntimeError(
+            f"{operation} failed after {self.settings.api_retry_attempts} attempts: {last_error}"
+        ) from last_error
+
     def _generate_text(self, model: str, contents: Any, context: str) -> str:
-        response = self.client.models.generate_content(model=model, contents=contents)
+        response = self._run_with_retry(
+            operation=context,
+            func=lambda: self.client.models.generate_content(model=model, contents=contents),
+        )
         text = self._clean_text(response.text or "")
         if not text:
             raise ValueError(f"Gemini returned empty text for {context}.")
@@ -120,18 +167,34 @@ class GeminiClient:
         )
 
     def embed_text(self, text: str) -> list[float]:
-        text = self._require_non_empty(text, "embedding")
-        result = self.client.models.embed_content(
-            model=self.settings.embedding_model,
-            contents=text,
-            config=types.EmbedContentConfig(
-                task_type="SEMANTIC_SIMILARITY",
-                output_dimensionality=self.settings.embedding_dimensions,
-            ),
-        )
-        if not result.embeddings:
-            raise ValueError("Gemini returned no embeddings.")
-        return list(result.embeddings[0].values)
+        return self.embed_texts([text])[0]
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        cleaned_texts = [self._require_non_empty(text, "embedding") for text in texts]
+        all_embeddings: list[list[float]] = []
+
+        for start in range(0, len(cleaned_texts), self.settings.embedding_batch_size):
+            batch = cleaned_texts[start : start + self.settings.embedding_batch_size]
+            result = self._run_with_retry(
+                operation="embedding",
+                func=lambda batch=batch: self.client.models.embed_content(
+                    model=self.settings.embedding_model,
+                    contents=batch,
+                    config=types.EmbedContentConfig(
+                        task_type="SEMANTIC_SIMILARITY",
+                        output_dimensionality=self.settings.embedding_dimensions,
+                    ),
+                ),
+            )
+            if not result.embeddings:
+                raise ValueError("Gemini returned no embeddings.")
+
+            all_embeddings.extend([list(item.values) for item in result.embeddings])
+
+        if len(all_embeddings) != len(cleaned_texts):
+            raise ValueError("Gemini returned an unexpected number of embeddings.")
+
+        return all_embeddings
 
     def answer_question(
         self,
@@ -276,7 +339,7 @@ def build_records(
     elements: list[dict[str, Any]],
     gemini_client: GeminiClient,
 ) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+    records_without_embeddings: list[dict[str, Any]] = []
 
     for element in elements:
         element_id = element["element_id"]
@@ -305,7 +368,7 @@ def build_records(
             if not summary:
                 continue
 
-            records.append(
+            records_without_embeddings.append(
                 {
                     "element_id": element_id,
                     "source_path": source_path,
@@ -315,7 +378,6 @@ def build_records(
                     "summary": summary,
                     "asset_path": asset_path,
                     "metadata": metadata,
-                    "embedding": gemini_client.embed_text(summary),
                 }
             )
         except Exception as exc:  # noqa: BLE001
@@ -323,14 +385,21 @@ def build_records(
                 f"Skipping element {element_id} ({chunk_type}) due to processing error: {exc}"
             )
 
-    return records
+    if not records_without_embeddings:
+        return []
+
+    embeddings = gemini_client.embed_texts([record["summary"] for record in records_without_embeddings])
+    for record, embedding in zip(records_without_embeddings, embeddings, strict=True):
+        record["embedding"] = embedding
+
+    return records_without_embeddings
 
 
 def ingest_pdf(
     pdf_path: str,
     settings: Settings,
     write_debug_json: bool,
-) -> None:
+) -> dict[str, Any]:
     gemini_client = GeminiClient(settings)
     vector_store = VectorStore(settings)
 
@@ -342,20 +411,15 @@ def ingest_pdf(
     source_path = str(Path(pdf_path).expanduser().resolve())
     vector_store.replace_document(source_path, records)
 
-    print(
-        json.dumps(
-            {
-                "source_path": source_path,
-                "records_indexed": len(records),
-                "chroma_path": settings.chroma_path,
-                "collection": settings.chroma_collection,
-            },
-            indent=2,
-        )
-    )
+    return {
+        "source_path": source_path,
+        "records_indexed": len(records),
+        "chroma_path": settings.chroma_path,
+        "collection": settings.chroma_collection,
+    }
 
 
-def ask_question(question: str, settings: Settings, top_k: int) -> None:
+def ask_question(question: str, settings: Settings, top_k: int) -> dict[str, Any]:
     gemini_client = GeminiClient(settings)
     vector_store = VectorStore(settings)
 
@@ -380,7 +444,7 @@ def ask_question(question: str, settings: Settings, top_k: int) -> None:
         ],
         "answer": answer,
     }
-    print(json.dumps(response, indent=2))
+    return response
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -410,9 +474,9 @@ def main() -> None:
     settings = Settings.from_env()
 
     if args.command == "ingest":
-        ingest_pdf(args.pdf, settings, args.write_debug_json)
+        print(json.dumps(ingest_pdf(args.pdf, settings, args.write_debug_json), indent=2))
     elif args.command == "ask":
-        ask_question(args.question, settings, args.top_k)
+        print(json.dumps(ask_question(args.question, settings, args.top_k), indent=2))
 
 
 if __name__ == "__main__":

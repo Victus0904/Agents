@@ -78,54 +78,86 @@ This will:
 
 Chroma data is stored by default in `./chroma_db`.
 
-## Docker Deployment
+## API Deployment
 
-Build the image:
+The repository now exposes the RAG pipeline as a FastAPI service for local
+development and Render deployment.
 
-```bash
-docker build -t multimodal-rag .
-```
-
-Create a `.env` file from `.env.example`, then run ingestion with the current
-project directory mounted into the container:
+Start it with Docker Compose:
 
 ```bash
-docker run --rm \
-  --env-file .env \
-  -e CHROMA_PATH=/app/chroma_db \
-  -v "$(pwd)/chroma_db:/app/chroma_db" \
-  -v "$(pwd):/app/data" \
-  -w /app/data \
-  multimodal-rag ingest --pdf Optical_Music_Recognition_State_of_the_Art_and_Maj.pdf --write-debug-json
+docker compose up --build
 ```
 
-Ask a question against the persisted Chroma data:
+On PowerShell:
+
+```powershell
+docker compose up --build
+```
+
+The API is available at `http://localhost:8000` with:
+
+- `GET /health`
+- `POST /ingest`
+- `POST /ask`
+
+OpenAPI docs are served at `http://localhost:8000/docs`.
+
+### Ingest a PDF over HTTP
+
+Using `curl`:
 
 ```bash
-docker run --rm \
-  --env-file .env \
-  -e CHROMA_PATH=/app/chroma_db \
-  -v "$(pwd)/chroma_db:/app/chroma_db" \
-  -v "$(pwd):/app/data" \
-  -w /app/data \
-  multimodal-rag ask --question "What is this paper about?" --top-k 5
+curl -X POST "http://localhost:8000/ingest" \
+  -F "pdf=@Optical_Music_Recognition_State_of_the_Art_and_Maj.pdf" \
+  -F "write_debug_json=true"
 ```
 
-If you prefer Docker Compose:
+Using PowerShell:
+
+```powershell
+curl.exe -X POST "http://localhost:8000/ingest" `
+  -F "pdf=@Optical_Music_Recognition_State_of_the_Art_and_Maj.pdf" `
+  -F "write_debug_json=true"
+```
+
+### Ask a question over HTTP
 
 ```bash
-docker compose run --rm multimodal-rag ingest --pdf Optical_Music_Recognition_State_of_the_Art_and_Maj.pdf --write-debug-json
-docker compose run --rm multimodal-rag ask --question "What is this paper about?" --top-k 5
+curl -X POST "http://localhost:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is this paper about?","top_k":5}'
 ```
+
+On PowerShell:
+
+```powershell
+curl.exe -X POST "http://localhost:8000/ask" `
+  -H "Content-Type: application/json" `
+  -d '{\"question\":\"What is this paper about?\",\"top_k\":5}'
+```
+
+### Render
+
+This repo includes `render.yaml` for a Docker-based Render web service. Render
+free is suitable for demos, but there is an important storage constraint:
+`ChromaDB` in this repo uses local disk, while Render free web services do not
+provide persistent disks. That means indexed data may be lost on restart,
+redeploy, or spin-down.
+
+For a demo deployment on Render:
+
+1. Push this repo to GitHub.
+2. Create a new Render Blueprint or Web Service from the repo.
+3. Set the required environment variables from `.env.example`.
+4. Deploy the service and use the `/docs` page or the API endpoints directly.
 
 Notes:
 
-- The image installs `poppler-utils`, `tesseract-ocr`, and `libmagic-dev`.
-- `./chroma_db` is mounted for persistent vector storage.
-- The project directory is mounted at `/app/data`, so PDFs, extracted assets,
-  and `processed_metadata.json` stay on the host filesystem.
-- `CHROMA_PATH` is redirected to `/app/chroma_db` inside the container so the
-  database lives on the dedicated volume mount.
+- The image installs `poppler-utils`, `tesseract-ocr`, `libmagic-dev`, and related runtime libraries.
+- `./chroma_db` is mounted locally in Compose so your index persists across local restarts.
+- `./uploads` is mounted locally in Compose, so uploaded PDFs and extracted assets persist across local restarts.
+- Render free remains demo-grade unless you move vector persistence off local disk or upgrade to a plan with persistent storage.
 
 ## Ask questions
 
@@ -143,7 +175,9 @@ The query flow:
 ## Files
 
 - `document_parser.py`: layout-aware PDF partitioning and debug JSON output
-- `multimodal_rag.py`: ingestion, retrieval, and generation CLI
+- `multimodal_api.py`: FastAPI service for ingestion and question answering
+- `multimodal_rag.py`: ingestion, retrieval, and generation CLI/core logic
+- `render.yaml`: Render web service definition
 - `.env.example`: required environment variables
 
 ## Current behavior notes

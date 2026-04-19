@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: multimodal-rag-api
+    runtime: docker
+    plan: free
+    autoDeploy: true

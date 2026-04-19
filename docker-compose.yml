@@ -7,8 +7,10 @@ services:
       - .env
     environment:
       CHROMA_PATH: /app/chroma_db
+      PORT: "8000"
     volumes:
       - ./chroma_db:/app/chroma_db
-      - ./:/app/data
-    working_dir: /app/data
-    entrypoint: ["python", "/app/multimodal_rag.py"]
+      - ./uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    working_dir: /app

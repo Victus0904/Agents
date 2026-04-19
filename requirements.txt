@@ -1,8 +1,11 @@
 chromadb
+fastapi
 google-genai
 pdf2image
 pi-heif
 pydantic
+python-multipart
 unstructured
 unstructured-inference
 unstructured-pytesseract
+uvicorn

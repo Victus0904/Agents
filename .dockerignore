@@ -13,3 +13,4 @@ env/
 chroma_db/
 extracted_assets/
 processed_metadata.json
+uploads/
